@@ -1,0 +1,41 @@
+# Run the whole app:  make up   (or: docker compose up --build -d --wait)
+#   frontend -> http://localhost:3000
+#   backend  -> http://localhost:8000
+# Needs a .env file in this folder (copy .env.example and add your keys).
+
+services:
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      # Always keep the database on the named volume inside Docker
+      DATABASE_URL: sqlite:////data/app.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - chat-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the JS at build time; the BROWSER calls this URL,
+        # so it is localhost:8000 (not the "backend" service name).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # SQLite file lives here, so chat history survives "make down" / rebuilds
+  chat-data:
