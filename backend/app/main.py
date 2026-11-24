@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import Settings, load_settings
+from app.db import Database, utc_now
 from app.llm import AllProvidersFailed, LLMGateway
 from app.schemas import (
     ChatMetadata,
@@ -29,6 +30,8 @@ async def health(request: Request):
     state = request.app.state
     if not state.settings.api_keys:
         raise HTTPException(status_code=503, detail="no API keys configured")
+    if not state.db.ping():
+        raise HTTPException(status_code=503, detail="database unavailable")
     return HealthResponse(
         status="ok",
         keys_configured=len(state.settings.api_keys),
@@ -39,10 +42,17 @@ async def health(request: Request):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(body: ChatRequest, request: Request):
     start = time.perf_counter()
+    received_at = utc_now()
     state = request.app.state
+    db: Database = state.db
 
-    system_prompt = body.system_prompt or state.settings.default_system_prompt
-    history = state.store.get(body.session_id, [])  # TEMP: in-memory, SQLite in Step 3
+    # Prompt priority: sent now > saved for this session > default from env
+    system_prompt = (
+        body.system_prompt
+        or db.get_system_prompt(body.session_id)
+        or state.settings.default_system_prompt
+    )
+    history = db.get_history(body.session_id)  # unknown session -> [] -> new session
 
     # Full message list sent to the LLM: system + earlier turns + new message
     messages = [{"role": "system", "content": system_prompt}]
@@ -66,10 +76,14 @@ async def chat(body: ChatRequest, request: Request):
     )
 
     # Save the user message and the reply together, only after success
-    state.store.setdefault(body.session_id, []).extend([
-        {"role": "user", "content": body.message},
-        {"role": "assistant", "content": result.reply, "metadata": metadata.model_dump()},
-    ])
+    db.save_turn(
+        session_id=body.session_id,
+        user_message=body.message,
+        assistant_reply=result.reply,
+        metadata=metadata.model_dump(),
+        system_prompt=body.system_prompt or None,
+        user_created_at=received_at,
+    )
 
     return ChatResponse(session_id=body.session_id, reply=result.reply, metadata=metadata)
 
@@ -80,7 +94,7 @@ async def chat(body: ChatRequest, request: Request):
     response_model_exclude_none=True,  # user messages have no "metadata" key
 )
 async def get_history(session_id: str, request: Request):
-    history = request.app.state.store.get(session_id)
+    history = request.app.state.db.get_history(session_id)
     if not history:
         raise HTTPException(status_code=404, detail="session not found")
     return HistoryResponse(session_id=session_id, messages=history)
@@ -93,8 +107,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         # Runs once at startup
         app.state.settings = settings
+        app.state.db = Database(settings.database_path)
+        app.state.db.init()  # creates tables on startup
         app.state.llm = LLMGateway(settings)
-        app.state.store = {}  # TEMP: session_id -> list of messages
         logger.info("Started with %d key(s), model=%s", len(settings.api_keys), settings.model)
         yield
 
