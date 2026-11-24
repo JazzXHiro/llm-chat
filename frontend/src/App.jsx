@@ -4,6 +4,8 @@ import ChatMessage from './components/ChatMessage.jsx'
 import Composer from './components/Composer.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
 
+const HEALTH_RETRY_MS = 5000
+
 // A new random id = a new session on the backend (unknown id starts a new session)
 function newSessionId() {
   if (window.crypto?.randomUUID) return `s-${crypto.randomUUID()}`
@@ -26,8 +28,23 @@ export default function App() {
   // The prompt is saved with the first successful turn, so lock it after that
   const promptLocked = messages.some((message) => message.role === 'assistant')
 
+  // Check /health on load; while it fails (e.g. Render free tier waking up), retry every few seconds
   useEffect(() => {
-    checkHealth().then(setHealth)
+    let stopped = false
+    let timer = null
+
+    async function poll() {
+      const result = await checkHealth()
+      if (stopped) return
+      setHealth(result)
+      if (!result) timer = setTimeout(poll, HEALTH_RETRY_MS)
+    }
+
+    poll()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
   }, [])
 
   // Keep the newest message in view
@@ -49,6 +66,8 @@ export default function App() {
     try {
       const data = await sendChat({ sessionId, message: text, systemPrompt, simulate })
       addMessage({ role: 'assistant', content: data.reply, metadata: data.metadata })
+      // A reply proves the backend is up, so refresh a red badge right away
+      if (!health) checkHealth().then((result) => result && setHealth(result))
     } catch (error) {
       // 422 / 503 / network problems become a readable bubble, never a blank screen
       addMessage({ role: 'error', content: error.message, status: error.status })
@@ -111,7 +130,7 @@ export default function App() {
 
 function HealthBadge({ health }) {
   if (health === 'checking') return <span className="health health-checking">Checking backend…</span>
-  if (!health) return <span className="health health-down">Backend unreachable</span>
+  if (!health) return <span className="health health-down">Backend unreachable · retrying…</span>
   return (
     <span className="health health-ok">
       Backend online · {health.keys_configured} keys · cache {health.cache_enabled ? 'on' : 'off'}

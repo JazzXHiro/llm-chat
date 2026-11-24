@@ -47,7 +47,8 @@ export async function sendChat({ sessionId, message, systemPrompt, simulate }) {
 // GET /health -> { status, keys_configured, cache_enabled } or null when unreachable
 export async function checkHealth() {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`)
+    // Give up after 10 s so a hanging request (cold start) doesn't block the next retry
+    const response = await fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(10000) })
     return response.ok ? await response.json() : null
   } catch {
     return null
