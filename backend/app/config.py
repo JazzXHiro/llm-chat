@@ -43,7 +43,11 @@ def load_settings() -> Settings:
         api_keys=_split_csv(env.get("LLM_API_KEYS", "")),
         model=env.get("LLM_MODEL", "gemini/gemini-3.5-flash-lite"),
         database_url=env.get("DATABASE_URL", "sqlite:///./data/app.db"),
-        allowed_origins=_split_csv(env.get("ALLOWED_ORIGINS", "http://localhost:3000")),
+        # Browsers send Origin without a trailing "/", so "https://x.app/" must match too
+        allowed_origins=[
+            origin.rstrip("/")
+            for origin in _split_csv(env.get("ALLOWED_ORIGINS", "http://localhost:3000"))
+        ],
         enable_failure_simulation=_to_bool(env.get("ENABLE_FAILURE_SIMULATION", "false")),
         default_system_prompt=env.get(
             "DEFAULT_SYSTEM_PROMPT", "You are a helpful, concise assistant."
