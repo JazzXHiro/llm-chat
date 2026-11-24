@@ -123,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.db = Database(settings.database_path)
         app.state.db.init()  # creates tables on startup
         app.state.llm = LLMGateway(settings)
+        await app.state.llm.warm_up()  # makes the first real cache hit fast too
         logger.info("Started with %d key(s), model=%s", len(settings.api_keys), settings.model)
         yield
 
