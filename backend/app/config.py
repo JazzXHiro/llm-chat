@@ -41,7 +41,7 @@ def load_settings() -> Settings:
     env = os.environ
     return Settings(
         api_keys=_split_csv(env.get("LLM_API_KEYS", "")),
-        model=env.get("LLM_MODEL", "gemini/gemini-2.5-flash"),
+        model=env.get("LLM_MODEL", "gemini/gemini-3.5-flash-lite"),
         database_url=env.get("DATABASE_URL", "sqlite:///./data/app.db"),
         allowed_origins=_split_csv(env.get("ALLOWED_ORIGINS", "http://localhost:3000")),
         enable_failure_simulation=_to_bool(env.get("ENABLE_FAILURE_SIMULATION", "false")),

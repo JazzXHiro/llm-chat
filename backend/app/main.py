@@ -4,7 +4,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -18,6 +18,7 @@ from app.schemas import (
     HealthResponse,
     HistoryResponse,
 )
+from app.simulate import InvalidSimulationHeader, parse_simulation_header
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("app")
@@ -40,11 +41,23 @@ async def health(request: Request):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(body: ChatRequest, request: Request):
+async def chat(
+    body: ChatRequest,
+    request: Request,
+    x_simulate_failure: str | None = Header(default=None),
+):
     start = time.perf_counter()
     received_at = utc_now()
     state = request.app.state
     db: Database = state.db
+
+    # Failover test hook: only honoured when ENABLE_FAILURE_SIMULATION=true
+    simulate = {}
+    if state.settings.enable_failure_simulation:
+        try:
+            simulate = parse_simulation_header(x_simulate_failure, state.settings.key_ids)
+        except InvalidSimulationHeader as error:
+            raise HTTPException(status_code=422, detail=f"invalid X-Simulate-Failure header: {error}")
 
     # Prompt priority: sent now > saved for this session > default from env
     system_prompt = (
@@ -60,7 +73,7 @@ async def chat(body: ChatRequest, request: Request):
     messages.append({"role": "user", "content": body.message})
 
     try:
-        result = await state.llm.complete(messages)
+        result = await state.llm.complete(messages, simulate=simulate)
     except AllProvidersFailed:
         # Nothing is stored for a failed request
         raise HTTPException(status_code=503, detail="all providers unavailable")
